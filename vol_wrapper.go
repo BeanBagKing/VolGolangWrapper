@@ -33,7 +33,7 @@ func runModule(volatilityPath, memoryImage, module, outputDir string, wg *sync.W
 
 	fmt.Printf("Running module: %s\n", module)
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Error running module %s: %v\n", module, err)
+		fmt.Printf("!--- Error running module %s: %v\n", module, err)
 	} else {
 		duration := time.Since(start).Seconds()
 		fmt.Printf("    Module %s completed in %.2f seconds\n", module, duration)
