@@ -3,7 +3,7 @@ Golang wrapper for Volatility3. Takes in a newline delimited list of plugins (mo
 
 # Example Usage
 ```
-(vol3) mike@ISAAC:/mnt/c/Users/Mike/Desktop/malware/New$ go run vol_wrapper.go -p /home/mike/volatility3/vol3/bin/vol -i /mnt/c/Users/Mike/Desktop/malware/New/vatsalgupta67/vat_exe.dmp -m ./plugins.txt -o /mnt/c/Users/Mike/Desktop/malware/New/vatsalgupta67/vat_exe/
+(vol3) mike@ISAAC:/mnt/c/Users/BBK$ go run vol_wrapper.go -p /home/bbk/volatility3/vol3/bin/vol -i /mnt/c/Users/BBK/mem.dmp -m ./plugins.txt -o /mnt/c/Users/BBK/mem_output/
 Using up to 15 goroutines
 Running module: windows.crashinfo
 Running module: timeliner
