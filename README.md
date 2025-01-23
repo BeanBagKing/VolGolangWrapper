@@ -1,5 +1,5 @@
 # vol_wrapper.go
-Golang wrapper for Volatility3. Takes in a newline delimited list of plugins (modules) and runs them in parallel.
+Golang wrapper for Volatility3. Takes in a newline delimited list of plugins (modules) and runs them in parallel. Outputs all CSV's to a directory
 
 # Example Usage
 ```
