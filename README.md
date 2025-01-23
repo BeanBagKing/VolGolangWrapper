@@ -45,3 +45,5 @@ Usage of vol_wrapper.go:
 
 # Errata
 I used the modules keyword instead of plugins by accident at first, but I'm keeping it now. Using plugins would mean a -p flag, so I'd then have to change the Vol Path flag. I can't use -v, that's typically verbose, and I can't use -i because that's already my input file, so maybe something else, or I could just leave it.
+
+the plugins.txt file currently contains the Windows plugins that don't require extra arguments or output raw files. It also excludes Memmap as that's typically unnecessary and takes an order of magnitude longer than any others. The list is sorted in rough order by runtime, with the longest first, in order to reduce the total runtime.
