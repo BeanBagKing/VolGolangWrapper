@@ -29,3 +29,19 @@ Running module: windows.drivermodule
     Module windows.cmdline completed in 73.31 seconds
 [...etc...]
 ```
+# Help
+```
+$ go run vol_wrapper.go -h
+Usage of vol_wrapper.go:
+  -i string
+        Path to the memory image
+  -m string
+        Path to file containing list of modules (newline delimited)
+  -o string
+        Path to the output directory
+  -p string
+        Path to the Volatility3 executable
+```
+
+# Errata
+I used the modules keyword instead of plugins by accident at first, but I'm keeping it now. Using plugins would mean a -p flag, so I'd then have to change the Vol Path flag. I can't use -v, that's typically verbose, and I can't use -i because that's already my input file, so maybe something else, or I could just leave it.
