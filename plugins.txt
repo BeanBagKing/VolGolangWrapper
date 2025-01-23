@@ -63,7 +63,6 @@ windows.shimcachemem.ShimcacheMem
 windows.skeleton_key_check.Skeleton_Key_Check
 windows.ssdt.SSDT
 windows.statistics.Statistics
-windows.strings.Strings
 windows.suspended_threads.SuspendedThreads
 windows.suspicious_threads.SuspiciousThreads
 windows.svcdiff.SvcDiff
