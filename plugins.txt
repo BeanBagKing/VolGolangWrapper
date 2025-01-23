@@ -43,7 +43,6 @@ windows.mutantscan.MutantScan
 windows.netscan.NetScan
 windows.netstat.NetStat
 windows.orphan_kernel_threads.Threads
-windows.pe_symbols.PESymbols
 windows.poolscanner.PoolScanner
 windows.privileges.Privs
 windows.processghosting.ProcessGhosting
@@ -76,8 +75,6 @@ windows.truecrypt.Passphrase
 windows.unhooked_system_calls.unhooked_system_calls
 windows.unloadedmodules.UnloadedModules
 windows.vadinfo.VadInfo
-windows.vadregexscan.VadRegExScan
 windows.vadwalk.VadWalk
-windows.vadyarascan.VadYaraScan
 windows.verinfo.VerInfo
 windows.virtmap.VirtMap
