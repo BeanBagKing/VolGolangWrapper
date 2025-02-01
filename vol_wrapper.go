@@ -12,10 +12,16 @@ import (
 	"time"
 )
 
+var (
+	runningModules sync.Map
+)
+
 func runModule(volatilityPath, memoryImage, module, outputDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	start := time.Now()
+	runningModules.Store(module, start)
+	defer runningModules.Delete(module)
 
 	memoryImageName := memoryImage[strings.LastIndex(memoryImage, string(os.PathSeparator))+1:]
 	outputFile := fmt.Sprintf("%s%c%s_%s.csv", outputDir, os.PathSeparator, memoryImageName, module)
@@ -40,12 +46,51 @@ func runModule(volatilityPath, memoryImage, module, outputDir string, wg *sync.W
 	}
 }
 
+func monitorKeyPress() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		_, err := reader.ReadByte() // Wait for a key press
+		if err == nil {
+			fmt.Println("\n->->->->->->->->->-> Currently running modules <-<-<-<-<-<-<-<-<-<-")
+			runningModules.Range(func(key, value interface{}) bool {
+				module := key.(string)
+				start := value.(time.Time)
+				runtime := time.Since(start).Seconds()
+				fmt.Printf("Module: %s, Runtime: %.2f seconds\n", module, runtime)
+				return true
+			})
+			fmt.Println("->->->->->->->->->->->->->->-> End <-<-<-<-<-<-<-<-<-<-<-<-<-<-<-\n")
+		}
+	}
+}
+
 func main() {
 	// Define flags
 	volatilityPath := flag.String("p", "", "Path to the Volatility3 executable")
 	memoryImage := flag.String("i", "", "Path to the memory image")
 	modulesFile := flag.String("m", "", "Path to file containing list of modules (newline delimited)")
 	outputDir := flag.String("o", "", "Path to the output directory")
+
+
+	// Override the default usage function
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Custom Help for Volatility Wrapper
+
+		Usage:
+		  %s [options]
+
+		Options:
+		`, os.Args[0])
+				flag.PrintDefaults()
+				fmt.Fprintln(os.Stderr, `
+		Additional Information:
+		  - Enter/Return/↵ during execution will print currently running modules
+		  - Example usage:
+		      $ go run vol_wrapper.go -p /path/to/which/vol -i /path/to/image.dd -m /path/to/modules.txt -o /path/to/output/folder/
+		  - Developed under Linux, may or may not work in Windows
+		`)
+			}
+
 	flag.Parse()
 
 	if *volatilityPath == "" || *memoryImage == "" || *modulesFile == "" || *outputDir == "" {
@@ -92,6 +137,9 @@ func main() {
 	// Track total time
 	totalStart := time.Now()
 
+	// Start key press monitoring in a separate goroutine
+	go monitorKeyPress()
+
 	// Create a channel to limit concurrency
 	sem := make(chan struct{}, numGoroutines)
 	var wg sync.WaitGroup
@@ -110,3 +158,4 @@ func main() {
 	totalDuration := time.Since(totalStart).Seconds()
 	fmt.Printf("All modules completed in %.2f seconds.\n", totalDuration)
 }
+
