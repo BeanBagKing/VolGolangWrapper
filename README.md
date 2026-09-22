@@ -79,9 +79,10 @@ Example:
 # Updates
 2026-09-21
 * Numerous bug fixes, only one major. A downloaded symbols package may start, and during download, other plugs would try to use that incomplete package, resulting in plugin failure. A new "warmup" plugin caches the symbols before starting on parallel processing.
-* Numerous new flags added. The old ones still work. See help for all of them. The biggest other than -t to me is -r to pick the renderer (e.g. from csv to jsonl(
+* Numerous new flags added. The old ones still work. See help for all of them. The biggest other than -t to me is -r to pick the renderer (e.g. from csv to jsonl)
 * New defaults, these try to autodetect vol path and create default folders
 * You can now specify a target type (e.g. windows) and it will run all plugins found for that type, eliminating the need to manually update lists.
+* I did not include plugins.csv because then I would have needed to update it with every Volatility release, that's now what vol_plugin_inventory.py is for. Plus it's a much better reference than volatlities help menu.
 
 # Errata
 I used the modules keyword instead of plugins by accident at first, but I'm keeping it now. Using plugins would mean a -p flag, so I'd then have to change the Vol Path flag. I can't use -v, that's typically verbose, and I can't use -i because that's already my input file, so maybe something else, or I could just leave it.
