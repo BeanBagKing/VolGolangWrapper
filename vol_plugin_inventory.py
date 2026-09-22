@@ -20,9 +20,11 @@ the same at run time without editing the file.
 import argparse
 import ast
 import csv
+import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -524,7 +526,9 @@ def collect_via_api(paths: "Paths", verbose: bool = False) -> List[Dict[str, Any
             input=PROBE_SOURCE,
             text=True,
             capture_output=True,
-            cwd=paths.vol_root,
+            # Only if it exists: with a pip-installed framework there may be
+            # no checkout, and the api collector does not need one.
+            cwd=paths.vol_root if os.path.isdir(paths.vol_root) else None,
             env=env,
         )
         if proc.returncode != 0 or not os.path.exists(out_path):
@@ -1000,6 +1004,78 @@ class Paths:
         return name[:-4] if name.lower().endswith(".exe") else name
 
 
+def venv_binary(root: str, name: str) -> str:
+    """Name an executable inside a virtualenv."""
+    if os.name == "nt":
+        return os.path.join(root, "Scripts", name + ".exe")
+    return os.path.join(root, "bin", name)
+
+
+def can_import_volatility(interpreter: str) -> bool:
+    """Can this interpreter import volatility3?
+
+    The point of finding an interpreter is importing the framework, so that is
+    what gets tested, rather than assuming a path implies a working install.
+    """
+    if interpreter == sys.executable:
+        # No subprocess needed to answer it about ourselves.
+        return importlib.util.find_spec("volatility3") is not None
+    try:
+        return (
+            subprocess.run(
+                [interpreter, "-c", "import volatility3"],
+                capture_output=True,
+                timeout=30,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def find_interpreter(venv_path: str, override: Optional[str]) -> str:
+    """Locate a Python that can import volatility3.
+
+    Tried in order: an explicit --python; the interpreter already running this
+    script, which is the right answer whenever the script is run from inside an
+    activated virtualenv; $VIRTUAL_ENV, so a venv named anything works; and
+    finally the conventional checkout layout.
+
+    Each candidate has to actually import the framework, so a path that exists
+    but holds a different environment is passed over rather than failing later.
+    """
+    if override:
+        return override
+
+    candidates = [sys.executable]
+    if active := os.environ.get("VIRTUAL_ENV"):
+        candidates.append(venv_binary(active, "python"))
+    candidates.append(venv_binary(venv_path, "python"))
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if can_import_volatility(candidate):
+            return candidate
+    # Nothing worked; return the conventional path so the error names it.
+    return venv_binary(venv_path, "python")
+
+
+def find_vol(venv_path: str, override: Optional[str]) -> str:
+    """Locate the vol executable, mirroring how vol_wrapper.go looks for it."""
+    if override:
+        return override
+    if active := os.environ.get("VIRTUAL_ENV"):
+        candidate = venv_binary(active, "vol")
+        if os.path.exists(candidate):
+            return candidate
+    if found := shutil.which("vol"):
+        return found
+    return venv_binary(venv_path, "vol")
+
+
 def resolve_paths(
     vol_root: str, venv: str, python: Optional[str] = None, vol: Optional[str] = None
 ) -> Paths:
@@ -1011,21 +1087,37 @@ def resolve_paths(
         if os.path.isabs(venv_expanded)
         else os.path.abspath(os.path.join(root, venv_expanded))
     )
-    bindir = "Scripts" if os.name == "nt" else "bin"
-    exe_suffix = ".exe" if os.name == "nt" else ""
-    python_path = python or os.path.join(venv_path, bindir, "python" + exe_suffix)
-    vol_path = vol or os.path.join(venv_path, bindir, "vol" + exe_suffix)
-    return Paths(vol_root=root, venv=venv_path, python=python_path, vol=vol_path)
+    return Paths(
+        vol_root=root,
+        venv=venv_path,
+        python=find_interpreter(venv_path, python),
+        vol=find_vol(venv_path, vol),
+    )
 
 
 def check_paths(paths: Paths, method: str) -> List[str]:
+    """Report what is missing for the requested method, and only that.
+
+    The two collectors need different things. The api collector needs an
+    interpreter that can import the framework, and nothing else -- the install
+    need not be a checkout at all. The help collector needs the vol executable
+    and the checkout, because it reads plugin source off disk. With "auto",
+    either one being usable is enough.
+    """
+    api_ready = os.path.exists(paths.python)
+    help_ready = os.path.exists(paths.vol) and os.path.isdir(paths.vol_root)
+
     problems = []
-    if not os.path.isdir(paths.vol_root):
-        problems.append(f"volatility root not found: {paths.vol_root}")
-    if method in ("auto", "api") and not os.path.exists(paths.python):
-        problems.append(f"virtualenv interpreter not found: {paths.python}")
-    if method in ("auto", "help") and not os.path.exists(paths.vol):
-        problems.append(f"vol executable not found: {paths.vol}")
+    if method == "api" and not api_ready:
+        problems.append(f"no interpreter able to import volatility3: {paths.python}")
+    if method == "help":
+        if not os.path.exists(paths.vol):
+            problems.append(f"vol executable not found: {paths.vol}")
+        if not os.path.isdir(paths.vol_root):
+            problems.append(f"volatility root not found: {paths.vol_root}")
+    if method == "auto" and not (api_ready or help_ready):
+        problems.append(f"no interpreter able to import volatility3: {paths.python}")
+        problems.append(f"and no vol executable at: {paths.vol}")
     return problems
 
 
