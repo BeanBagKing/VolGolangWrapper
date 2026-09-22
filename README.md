@@ -87,4 +87,10 @@ Example:
 # Errata
 I used the modules keyword instead of plugins by accident at first, but I'm keeping it now. Using plugins would mean a -p flag, so I'd then have to change the Vol Path flag. I can't use -v, that's typically verbose, and I can't use -i because that's already my input file, so maybe something else, or I could just leave it.
 
-the plugins.txt file currently contains the Windows plugins that don't require extra arguments or output raw files. It also excludes Memmap as that's typically unnecessary and takes an order of magnitude longer than any others. The list is sorted in rough order by runtime, with the longest first, in order to reduce the total runtime.
+~~the plugins.txt file currently contains the Windows plugins that don't require extra arguments or output raw files. It also excludes Memmap as that's typically unnecessary and takes an order of magnitude longer than any others.~~ The list is sorted in rough order by runtime, with the longest first, in order to reduce the total runtime.
+
+You can still use a static list that executes in the order provided. However, vol_plugin_inventory.py now generates a plugins.csv which can be used to run all plugins for a given system type. The plugins selected are based on Target System == OS of Choice and All, Bulk Support == True, and Deprecated == False. The plugin_stats.csv still ensures that the plugins are run in the optimal order, longest first to reduce total runtime, and will be populated by states from your system after the first run to improve future performance. 
+
+Q. Why use Python for one and Golang for the other?
+
+A. Python is more widely used, installed on a number of systems by default. The plugin inventory can be used as a standalone script to create an easier to read plugin list even if you aren't going to use the wrapper, essentially I felt like it was the better language. Similarly, the wrapper uses parallel execution, something Python only kinda sorta supported until very recent versions, I felt Go was the better choice there.
