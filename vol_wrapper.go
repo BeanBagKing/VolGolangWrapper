@@ -141,6 +141,7 @@ writing each plugin's output to its own file.
 Usage:
   %s -i <image> -t <system> [options]
   %s -i <image> -m <file>   [options]
+  %s -p <path to vol> -i <image> -m <plugins> -o <output dir> [options]
 
 Options:
 %s
@@ -148,14 +149,16 @@ Notes:
   Only -i and one of -t/-m are required. Volatility is found via $VIRTUAL_ENV,
   then PATH, then ~/volatility3/venv; results go to ./<image>-<UTC timestamp>Z
   unless -o says otherwise.
-  Modules come from either -t (chosen from %s) or -m (a list you
-  supply), never both. A -t list runs slowest first, using %s.
+  Modules come from either -t (chosen from %s) or -m (a list you supply), never both. 
+  A -t list runs slowest first, using %s.
   Pressing Enter during a run prints the modules still going.
   Developed under Linux; may or may not work on Windows.
 
 Example:
   %s -i 104_Alma_Memory.mem -t linux
-`, name, name, flag.CommandLine.FlagUsages(), defaultPluginsFile, defaultStatsFile, name)
+  %s -i Windows.mem -m ./plugins_list.txt
+  %s -p /usr/bin/volatility3/virt_env/bin/vol -i memory.img -m /root/plugins.txt -o /cases/mem/voloutput -r jsonl
+`, name, name, name, flag.CommandLine.FlagUsages(), defaultPluginsFile, defaultStatsFile, name, name, name)
 }
 
 // ---------------------------------------------------------------------------
