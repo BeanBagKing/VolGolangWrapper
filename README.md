@@ -52,6 +52,7 @@ Usage:
 
 Options:
   -d, --debug               Print the full error output of any module that fails
+  -x, --exclude string      File listing modules never to run, one per line (applies to -t and -m)
       --force               Overwrite output files from an earlier run
   -i, --image string        Path to the memory image
   -m, --modules string      File listing the modules to run, one per line
@@ -63,6 +64,7 @@ Options:
       --resume              Keep output files from an earlier run and only run what is missing
       --stats string        Per-plugin runtimes, read for ordering and updated as modules finish (default "plugin_stats.csv")
   -t, --target string       Select modules for this system (windows, linux, mac) instead of -m
+      --vol-args string     Volatility options passed to every run, quoted as one string, e.g. --vol-args="-s /symbols --offline"
   -p, --volatility string   Path to the Volatility 3 executable (default: $VIRTUAL_ENV, then PATH, then ~/volatility3/venv)
   -w, --warmup string       Module used to warm the symbol cache (default: first of windows.info.Info, linux.pslist.PsList, mac.pslist.PsList that runs)
 
@@ -72,7 +74,14 @@ Notes:
   unless -o says otherwise.
   Modules come from either -t (chosen from plugins.csv) or -m (a list you
   supply), never both. A -t list runs slowest first, using plugin_stats.csv.
+  -x removes modules from either list. Names may be shortened as Volatility
+  allows; one that matches no plugin, or several, is an error.
   Pressing Enter during a run prints the modules still going.
+  --vol-args options go before the plugin name, so they must be Volatility's
+  own (vol --help), not a plugin's. They are checked by one Volatility run
+  before the batch, which is also the only run given --clear-cache. Options
+  the wrapper sets (-f, -r) or that break a parallel run (-h, -c,
+  --single-location, --save-config, --write-config) are refused.
   Developed under Linux; may or may not work on Windows.
 
 Example:
@@ -81,6 +90,15 @@ Example:
 ```
 
 # Updates
+2026-10-01
+* New `-x`/`--exclude` flag takes a newline delimited list, like `-m`, of plugins never to run. It works with both `-t` and `-m`, e.g. `-t linux -x skip.txt` to run everything for Linux except yarascan.YaraScan, timeliner.Timeliner and linux.vmayarascan.VmaYaraScan.
+* Names can be shortened the same way Volatility allows (`timeliner` for `timeliner.Timeliner`). A name that matches no plugin, or more than one, stops the run with an error, since a typo would otherwise run the plugin you meant to skip. A valid name that isn't in this run is ignored, so one exclude file can cover Windows and Linux runs.
+* New `--vol-args` flag passes Volatility's own options through to every plugin run, so they don't each need a wrapper flag. Quote them as one string, e.g. `--vol-args "-s /some/symbols/dir --offline --clear-cache"`.
+* Only Volatility's global options work there (the ones in `vol --help`), since they go before the plugin name. A plugin's own options, a typo, or a missing value is caught by one Volatility run before the batch starts, and the wrapper stops with Volatility's error instead of every plugin failing.
+* `--clear-cache` is only given to that first run. Given to every plugin, each would delete the cache the others were reading.
+* Options that would go wrong without any error are refused: `-f` and `-r` (the wrapper sets them), `-h`, `--single-location` (would read a different image), `-c`, `--save-config` and `--write-config`. Abbreviations like `--rend` are caught too. `-l` and `--parallelism` work, with a note on how they behave in a parallel run.
+
+
 2026-09-21
 * Numerous bug fixes, only one major. A downloaded symbols package may start, and during download, other plugs would try to use that incomplete package, resulting in plugin failure. A new "warmup" plugin caches the symbols before starting on parallel processing.
 * Numerous new flags added. The old ones still work. See help for all of them. The biggest other than -t to me is -r to pick the renderer (e.g. from csv to jsonl)
