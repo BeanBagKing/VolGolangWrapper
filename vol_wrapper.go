@@ -51,6 +51,10 @@ type config struct {
 	target         string              // operating system to select plugins for
 	pluginsFile    string              // the inventory those plugins are chosen from
 	extraArgs      map[string][]string // per-module arguments supplied at the prompt
+	volArgs        []string            // Volatility options given to every invocation
+	clearCache     bool                // --clear-cache was in volArgs; run it once, alone
+	checkVolArgs   bool                // --vol-args was given; have Volatility check it first
+	excludeFile    string              // modules never to run, whichever list they came from
 }
 
 // parseFlags reads the command line and fails if the arguments do not make a
@@ -66,6 +70,7 @@ func parseFlags() config {
 	flag.StringVarP(&cfg.renderer, "renderer", "r", "csv",
 		"Volatility output format: "+strings.Join(rendererNames(), ", ")+" (sets the file extension)")
 	flag.StringVarP(&cfg.target, "target", "t", "", "Select modules for this system (windows, linux, mac) instead of -m")
+	flag.StringVarP(&cfg.excludeFile, "exclude", "x", "", "File listing modules never to run, one per line (applies to -t and -m)")
 	flag.StringVarP(&cfg.warmupModule, "warmup", "w", "", "Module used to warm the symbol cache (default: first of "+strings.Join(warmupCandidates, ", ")+" that runs)")
 	flag.BoolVarP(&cfg.debug, "debug", "d", false, "Print the full error output of any module that fails")
 	flag.StringVar(&cfg.pluginsFile, "plugins", defaultPluginsFile, "Plugin inventory that -t selects from")
@@ -74,8 +79,22 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.resume, "resume", false, "Keep output files from an earlier run and only run what is missing")
 	flag.BoolVar(&cfg.skipWarmup, "no-warmup", false, "Skip warming the symbol cache before running in parallel")
 	flag.BoolVar(&cfg.skipStats, "no-stats", false, "Neither read nor update the runtime statistics")
+	var volArgs string
+	flag.StringVar(&volArgs, "vol-args", "",
+		`Volatility options passed to every run, quoted as one string, e.g. --vol-args="-s /symbols --offline"`)
 	flag.Usage = printUsage
 	flag.Parse()
+
+	cfg.checkVolArgs = volArgs != ""
+	var notes []string
+	var err error
+	if cfg.volArgs, cfg.clearCache, notes, err = parseVolArgs(volArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "--vol-args: %v\n", err)
+		os.Exit(1)
+	}
+	for _, note := range notes {
+		fmt.Printf("Note: --vol-args %s\n", note)
+	}
 
 	if cfg.volatilityPath == "" {
 		cfg.volatilityPath = defaultVolatility()
@@ -151,7 +170,14 @@ Notes:
   unless -o says otherwise.
   Modules come from either -t (chosen from %s) or -m (a list you supply), never both. 
   A -t list runs slowest first, using %s.
+  -x removes modules from either list. Names may be shortened as Volatility
+  allows; one that matches no plugin, or several, is an error.
   Pressing Enter during a run prints the modules still going.
+  --vol-args options go before the plugin name, so they must be Volatility's
+  own (vol --help), not a plugin's. They are checked by one Volatility run
+  before the batch, which is also the only run given --clear-cache. Options
+  the wrapper sets (-f, -r) or that break a parallel run (-h, -c,
+  --single-location, --save-config, --write-config) are refused.
   Developed under Linux; may or may not work on Windows.
 
 Example:
@@ -342,6 +368,166 @@ func (t *stderrTail) summary() string {
 }
 
 // ---------------------------------------------------------------------------
+// Passing options through to Volatility
+// ---------------------------------------------------------------------------
+
+// Options --vol-args may not carry, because each would go wrong without
+// Volatility reporting an error. Every reason was checked against vol 2.28.2.
+var refusedVolArgs = []struct{ short, long, reason string }{
+	{"-f", "--file", "the wrapper sets it from -i"},
+	{"-r", "--renderer", "the wrapper sets it; use the wrapper's own -r"},
+	{"-h", "--help", "Volatility prints its help and exits 0, so every module would " +
+		"\"succeed\" with the help text as its output"},
+	{"", "--single-location", "it overrides -f, so every plugin would quietly read that " +
+		"location instead of the -i image"},
+	{"-c", "--config", "a config file is saved from one plugin run, and holds that run's " +
+		"settings and image location; applied to every plugin it no longer describes them"},
+	{"", "--save-config", "every plugin writes the same file: the first succeeds and the " +
+		"rest fail with \"file already exists\""},
+	{"", "--write-config", "every plugin writes the same config.json: the first succeeds " +
+		"and the rest fail with \"file already exists\""},
+}
+
+// Options that work, but not as someone might expect across a parallel batch.
+// They are allowed, with a note.
+var notedVolArgs = []struct{ short, long, note string }{
+	{"-l", "--log", "every module appends to the same log file, interleaved and not " +
+		"labelled by module"},
+	{"", "--parallelism", "each concurrent module starts its own workers as well, on top " +
+		"of the wrapper's"},
+}
+
+// Volatility's short options that take a value. In a cluster such as -qfimg,
+// everything after one of these is its value, not more options.
+const volValueShorts = "cefloprsu"
+
+// --clear-cache, matched by prefix like the others.
+const clearCacheArg = "--clear-cache"
+
+// volOptionNames returns every option name an argument could be read as.
+//
+// Volatility's parser accepts any unambiguous prefix of a long option, and
+// clustered short options, so matching whole words is not enough: --rend json
+// and --single-loc both run without complaint (exit 0, measured). Long
+// options are therefore matched by prefix -- an abbreviation that is in fact
+// ambiguous makes Volatility exit with an error anyway -- and a short cluster
+// is read one letter at a time until a letter that takes a value.
+func volOptionNames(arg string) []string {
+	var names []string
+	switch {
+	case strings.HasPrefix(arg, "--") && len(arg) > 3:
+		name, _, _ := strings.Cut(arg, "=")
+		longs := []string{clearCacheArg}
+		for _, o := range refusedVolArgs {
+			longs = append(longs, o.long)
+		}
+		for _, o := range notedVolArgs {
+			longs = append(longs, o.long)
+		}
+		for _, long := range longs {
+			if strings.HasPrefix(long, name) {
+				names = append(names, long)
+			}
+		}
+	case strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--"):
+		for _, letter := range arg[1:] {
+			names = append(names, "-"+string(letter))
+			if strings.ContainsRune(volValueShorts, letter) {
+				break
+			}
+		}
+	}
+	return names
+}
+
+// parseVolArgs splits the --vol-args string into arguments, shell-style;
+// refuses any option the wrapper cannot pass on safely; collects notes on the
+// risky ones; and takes --clear-cache out of the list.
+//
+// --clear-cache cannot be passed to every run. Volatility deletes its
+// identifier database and *.cache files at startup when given it, so in a
+// parallel batch every plugin would delete the cache the others are reading
+// from. It is honoured instead by the single preflight run; see
+// checkVolArgs.
+func parseVolArgs(line string) (args []string, clearCache bool, notes []string, err error) {
+	for _, arg := range splitArgs(line) {
+		if arg == "--" {
+			return nil, false, nil, fmt.Errorf(`"--" would make everything after it a ` +
+				"plugin name, including the wrapper's own -f")
+		}
+		names := volOptionNames(arg)
+		for _, name := range names {
+			for _, o := range refusedVolArgs {
+				if name == o.short || name == o.long {
+					shown := arg
+					if name != o.long {
+						shown = fmt.Sprintf("%s (read as %s)", arg, o.long)
+					}
+					return nil, false, nil, fmt.Errorf("%s is not allowed: %s", shown, o.reason)
+				}
+			}
+			for _, o := range notedVolArgs {
+				if name == o.short || name == o.long {
+					notes = append(notes, fmt.Sprintf("%s: %s", arg, o.note))
+				}
+			}
+		}
+		if len(names) == 1 && names[0] == clearCacheArg {
+			clearCache = true
+			continue
+		}
+		args = append(args, arg)
+	}
+	return args, clearCache, notes, nil
+}
+
+// volCommand builds one Volatility invocation: the passthrough options first,
+// since Volatility only reads its own options before the plugin name, then
+// whatever follows. Every caller follows them with an option (-f, or
+// --clear-cache), which also stops an open-ended one such as --hide-columns
+// from swallowing the plugin name.
+func volCommand(cfg config, rest ...string) *exec.Cmd {
+	args := append(append([]string{}, cfg.volArgs...), rest...)
+	return exec.Command(cfg.volatilityPath, args...)
+}
+
+// checkVolArgs runs Volatility once with the passthrough options, before
+// anything else, and exits if Volatility rejects them.
+//
+// Without it a typo, a missing value, a plugin's option given here, or an
+// --output-dir that does not exist fails every module separately, in the
+// middle of the batch. frameworkinfo.FrameworkInfo is used because it never
+// reads the image, so this costs one Volatility start-up. It is given -f and
+// -r exactly as the real runs are, so the arguments are parsed in the same
+// shape -- and a missing image is caught here too.
+//
+// This is also the one run that carries --clear-cache, so the cache is cleared
+// once, before the warmup fills it again. The rest of --vol-args comes along,
+// since --cache-path decides which cache is cleared.
+func checkVolArgs(cfg config) {
+	rest := []string{"-f", cfg.memoryImage, "-r", cfg.renderer, "frameworkinfo.FrameworkInfo"}
+	if cfg.clearCache {
+		rest = append([]string{clearCacheArg}, rest...)
+	}
+	var stderr stderrTail
+	cmd := volCommand(cfg, rest...)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		summary := stderr.summary()
+		// An unrecognised plugin name prints all ~200 valid ones on this line.
+		if len(summary) > 300 {
+			summary = summary[:300] + " ..."
+		}
+		fmt.Fprintf(os.Stderr, "Volatility rejected --vol-args (%v):\n  %s\n", err, summary)
+		fmt.Fprintln(os.Stderr, "--vol-args must hold Volatility's own options (vol --help), not a plugin's.")
+		os.Exit(1)
+	}
+	if cfg.clearCache {
+		fmt.Println("Volatility cache cleared")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Running one module
 // ---------------------------------------------------------------------------
 
@@ -406,7 +592,7 @@ func runModule(cfg config, module string, stats *statsTable) (ok bool) {
 	// where Volatility expects a plugin's own options.
 	args := append([]string{"-f", cfg.memoryImage, "-r", cfg.renderer, module},
 		cfg.extraArgs[module]...)
-	cmd := exec.Command(cfg.volatilityPath, args...)
+	cmd := volCommand(cfg, args...)
 	outfile, err := os.Create(partialPath)
 	if err != nil {
 		fmt.Printf("Error creating output file for module %s: %v\n", module, err)
@@ -617,6 +803,93 @@ func orderByRuntime(modules []string, stats *statsTable) {
 		}
 		return modules[i] < modules[j]
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Leaving modules out
+// ---------------------------------------------------------------------------
+
+// resolvePlugin returns the plugins a name refers to, by Volatility's own
+// rule: an exact full name, otherwise every full name containing it as a
+// case-sensitive substring. Volatility runs a plugin only when exactly one
+// matches, so "pslist" in a module list means windows.pslist.PsList if that is
+// the only plugin containing it.
+func resolvePlugin(name string, fullNames []string) []string {
+	var matches []string
+	for _, full := range fullNames {
+		if full == name {
+			return []string{full}
+		}
+		if strings.Contains(full, name) {
+			matches = append(matches, full)
+		}
+	}
+	return matches
+}
+
+// applyExclusions removes every module named in the exclude file.
+//
+// Entries and modules are both resolved to full names before comparing, so an
+// exclusion still applies when one side uses a short name -- a -m list of
+// "timeliner" against an exclusion of "timeliner.Timeliner", or the reverse.
+//
+// An entry that resolves to no plugin, or to several, is an error rather than
+// a warning: a typo in an exclude list otherwise runs exactly the plugin the
+// user asked to keep out, and nothing says so. An entry that is valid but not
+// in this run is fine, so one file can serve every target.
+//
+// Without an inventory nothing can be resolved, so names are compared as
+// written, and entries that match nothing are only warned about: there is no
+// way to tell a typo from a plugin that simply is not in the list.
+func applyExclusions(modules []string, path string, inventory []pluginRow, pluginsFile string) ([]string, error) {
+	entries, err := readModules(path)
+	if err != nil {
+		return nil, err
+	}
+	fullNames := pluginNames(inventory)
+
+	excluded := map[string]bool{}
+	for _, entry := range entries {
+		if len(fullNames) == 0 {
+			excluded[entry] = true
+			continue
+		}
+		switch matches := resolvePlugin(entry, fullNames); len(matches) {
+		case 0:
+			return nil, fmt.Errorf("%q matches no plugin in %s", entry, pluginsFile)
+		case 1:
+			excluded[matches[0]] = true
+		default:
+			return nil, fmt.Errorf("%q matches %d plugins (%s); give a longer name",
+				entry, len(matches), strings.Join(matches, ", "))
+		}
+	}
+
+	var removed []string
+	used := map[string]bool{}
+	for _, module := range modules {
+		key := module
+		if matches := resolvePlugin(module, fullNames); len(matches) == 1 {
+			key = matches[0]
+		}
+		if excluded[key] {
+			removed = append(removed, module)
+			used[key] = true
+		}
+	}
+
+	if len(fullNames) == 0 {
+		for _, entry := range entries {
+			if !used[entry] {
+				fmt.Printf("!--- Warning: %s is not in this run's module list (and %s is "+
+					"unavailable to check the name)\n", entry, pluginsFile)
+			}
+		}
+	}
+	if len(removed) > 0 {
+		fmt.Printf("Excluding %d module(s): %s\n", len(removed), strings.Join(removed, ", "))
+	}
+	return without(modules, removed), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,7 +1517,7 @@ func warmSymbolCache(cfg config) {
 	for _, module := range candidates {
 		start := time.Now()
 		var stderr stderrTail
-		cmd := exec.Command(cfg.volatilityPath, "-f", cfg.memoryImage, "-r", cfg.renderer, module)
+		cmd := volCommand(cfg, "-f", cfg.memoryImage, "-r", cfg.renderer, module)
 		cmd.Stdout = nil // Discarded; this run exists for its side effect
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err == nil {
@@ -1389,6 +1662,16 @@ func main() {
 		}
 	}
 
+	// Before the argument prompt, so nobody is asked about a module that is
+	// not going to run.
+	if cfg.excludeFile != "" {
+		var err error
+		if modules, err = applyExclusions(modules, cfg.excludeFile, inventory, cfg.pluginsFile); err != nil {
+			fmt.Printf("Error reading exclude file: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// A module list may name something the inventory does not cover.
 	if stats != nil {
 		stats.seedMissing(modules)
@@ -1413,6 +1696,11 @@ func main() {
 	fmt.Printf("Using up to %d goroutines\n", limit)
 
 	totalStart := time.Now()
+	// Before the warmup, so the identifier cache is rebuilt once, serially,
+	// rather than by every parallel plugin at once.
+	if cfg.checkVolArgs {
+		checkVolArgs(cfg)
+	}
 	if !cfg.skipWarmup {
 		warmSymbolCache(cfg)
 	}
